@@ -30,8 +30,7 @@ jobs:
           java-version: '17'
 
       # GitHub-hosted Ubuntu images already include Android command-line tools.
-      # Avoid android-actions/setup-android@v3 here: its default "tools" package
-      # is obsolete and causes sdkmanager to exit before the build starts.
+      # Avoid the obsolete "tools" package from android-actions/setup-android@v3.
       - name: Configure preinstalled Android SDK
         run: |
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
@@ -43,8 +42,8 @@ jobs:
 
       - name: Install Android SDK platforms and build tools
         run: |
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager --install "platforms;android-36-ext1" "build-tools;36.0.0" "platform-tools"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager --install "platforms;android-36.1" "build-tools;36.0.0" "platform-tools"
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
