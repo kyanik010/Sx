@@ -127,7 +127,19 @@ internal object SubtitlePipeline {
                     val attrs = attribute.findAll(match.groupValues[1])
                         .associate { it.groupValues[1].lowercase(Locale.ROOT) to it.groupValues[2] }
                     val begin = attrs["begin"] ?: return@forEach
-                    val end = attrs["end"] ?: return@forEach
+                    val end = attrs["end"] ?: attrs["dur"]?.let { duration ->
+                        val startMs = timeToMs(begin) ?: return@let null
+                        val durationMs = timeToMs(duration) ?: return@let null
+                        val totalMs = startMs + durationMs
+                        String.format(
+                            Locale.US,
+                            "%02d:%02d:%02d.%03d",
+                            totalMs / 3_600_000L,
+                            (totalMs / 60_000L) % 60L,
+                            (totalMs / 1_000L) % 60L,
+                            totalMs % 1_000L
+                        )
+                    } ?: return@forEach
                     add(begin, end, match.groupValues[2])
                 }
             }
