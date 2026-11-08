@@ -275,10 +275,15 @@
     if (typeof currentAppMode !== 'undefined' && currentAppMode === 'live') {
       throw new Error('البحث عن الترجمة متاح للأفلام والمسلسلات فقط.');
     }
-    const isSeries = !!(item.subtitleSeries || item.seriesTitle || (typeof currentAppMode !== 'undefined' && currentAppMode === 'series'));
     const title = String(item.subtitleTitle || item.seriesTitle || item.name || '').trim();
     if (!title) throw new Error('اسم المحتوى غير متوفر للبحث.');
     const episodeMatch = title.match(/(?:S(\d{1,2})E(\d{1,3})|(\d{1,2})x(\d{1,3}))/i);
+    // Lumen treats an explicit season/episode marker or episode progress key as
+    // authoritative series evidence even when the player item lacks series metadata.
+    const progressKey = String(item.progressKey || '');
+    const isSeries = !!(item.subtitleSeries || item.seriesTitle ||
+      (typeof currentAppMode !== 'undefined' && currentAppMode === 'series') ||
+      episodeMatch || progressKey.startsWith('ep:'));
     const season = Number(item.subtitleSeason || item.season || episodeMatch?.[1] || episodeMatch?.[3] || 0);
     const episode = Number(item.subtitleEpisode || item.episode || episodeMatch?.[2] || episodeMatch?.[4] || 0);
     const searchTitle = title
