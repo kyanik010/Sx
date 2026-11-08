@@ -104,7 +104,7 @@ internal object OpenSubtitlesClient {
                     when (code) {
                         429 -> "وصل OpenSubtitles إلى حد طلبات البحث المسموح. حاول لاحقاً."
                         401, 403 -> "رفض OpenSubtitles مفتاح API أو صلاحياته (HTTP $code)."
-                        else -> "فشل البحث في OpenSubtitles (HTTP $code)\${if (detail.isBlank()) "" else ": $detail"}"
+                        else -> "فشل البحث في OpenSubtitles (HTTP $code)${if (detail.isBlank()) "" else ": $detail"}"
                     }
                 )
             }
