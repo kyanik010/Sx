@@ -387,6 +387,7 @@
       const identity = activeIdentity();
       const results = [];
       const seen = new Set();
+      const providerErrors = [];
 
       const rawTitle = identity.title || '';
       const cleanTitle = rawTitle
@@ -415,6 +416,7 @@
             });
           }
         } catch (e) {
+          providerErrors.push('OpenSubtitles: ' + (e.message || 'تعذر البحث'));
           console.warn('Native OpenSubtitles search error:', e);
         }
       }
@@ -461,9 +463,14 @@
       renderSubtitleResults();
 
       if (status) {
+        const providerWarning = providerErrors.length
+          ? ' · تعذر الاتصال ببعض المصادر: ' + providerErrors.join('؛ ')
+          : '';
         status.textContent = subtitleResults.length
-          ? 'تم العثور على ' + subtitleResults.length + ' ترجمة'
-          : 'لم يتم العثور على ترجمة لهذه اللغة. جرّب اختيار (الكل) أو إضافة ملف ترجمة محلي.';
+          ? 'تم العثور على ' + subtitleResults.length + ' ترجمة' + providerWarning
+          : (providerErrors.length
+              ? 'لم تُرجع المصادر نتائج. ' + providerErrors.join('؛ ') + ' · جرّب إضافة مصدر Stremio أو ملف ترجمة محلي.'
+              : 'لم يتم العثور على ترجمة لهذه اللغة. جرّب اختيار (الكل) أو إضافة ملف ترجمة محلي.');
       }
     } catch (error) {
       if (status) status.textContent = error.message || 'تعذر البحث عن الترجمة.';
