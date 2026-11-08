@@ -290,47 +290,85 @@
   }
   function normalizeTitle(value) { return String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu,''); }
   async function resolveImdb(identity) {
-    const type = identity.isSeries ? 'series' : 'movie';
+    const preferredType = identity.isSeries ? 'series' : 'movie';
     const searchTitle = identity.searchTitle || identity.title;
     const target = normalizeTitle(searchTitle);
     let candidates = [];
+
+    // Match Lumen's identity resolution: try Cinemeta first, then search-enabled
+    // catalogs from installed addons if Cinemeta has no usable IMDb identity.
     try {
-      const url = 'https://v3-cinemeta.strem.io/catalog/' + type + '/top/search=' + encodeURIComponent(searchTitle) + '.json';
+      const url = 'https://v3-cinemeta.strem.io/catalog/' + preferredType +
+        '/top/search=' + encodeURIComponent(searchTitle) + '.json';
       const data = await nativeJson(url);
       candidates = data && Array.isArray(data.metas) ? data.metas : [];
     } catch (_) {}
-    if (!candidates.some(x => /^tt\d+$/.test(String(x.imdb_id || x.id || '')))) {
-      // Fallback to search-enabled catalogs installed by the user, as in Lumen.
-      for (const addon of installed.filter(x => x.enabled !== false)) {
-        try {
-          const manifest = await nativeJson(addon.url);
-          const base = addon.url.replace(/\/manifest\.json(?:\?.*)?$/,'').replace(/\/+$/,'');
-          for (const catalog of (Array.isArray(manifest.catalogs) ? manifest.catalogs : [])) {
-            if (catalog.type !== type || !catalog.id) continue;
-            const extras = Array.isArray(catalog.extra) ? catalog.extra : [];
-            if (!extras.some(extra => extra && extra.name === 'search')) continue;
-            try {
-              const data = await nativeJson(base + '/catalog/' + type + '/' +
-                encodeURIComponent(catalog.id) + '/search=' + encodeURIComponent(searchTitle) + '.json');
-              if (data && Array.isArray(data.metas)) candidates.push(...data.metas);
-            } catch (_) {}
+
+    candidates = candidates.filter(item =>
+      /^tt\\d+$/.test(String(item.imdb_id || item.id || ''))
+    );
+
+    if (!candidates.length) {
+      const allowedTypes = identity.isSeries ? ['series'] : ['movie', 'series'];
+      const addonBatches = await Promise.all(installed
+        .filter(addon => addon.enabled !== false)
+        .map(async addon => {
+          try {
+            const manifest = await nativeJson(addon.url);
+            const base = addon.url
+              .replace(/\\/manifest\\.json(?:\\?.*)?$/, '')
+              .replace(/\\/+$/, '');
+            const catalogs = (Array.isArray(manifest.catalogs) ? manifest.catalogs : [])
+              .filter(catalog => allowedTypes.includes(catalog.type) && catalog.id &&
+                Array.isArray(catalog.extra) &&
+                catalog.extra.some(extra => extra && extra.name === 'search'));
+
+            const catalogBatches = await Promise.all(catalogs.map(async catalog => {
+              try {
+                const url = base + '/catalog/' + catalog.type + '/' +
+                  encodeURIComponent(catalog.id) + '/search=' +
+                  encodeURIComponent(searchTitle) + '.json';
+                const data = await nativeJson(url);
+                return (data && Array.isArray(data.metas) ? data.metas : [])
+                  .map(meta => ({...meta, type:meta.type || catalog.type}));
+              } catch (_) {
+                return [];
+              }
+            }));
+            return catalogBatches.flat();
+          } catch (_) {
+            return [];
           }
-        } catch (_) {}
-      }
+        }));
+      candidates = addonBatches.flat().filter(item =>
+        /^tt\\d+$/.test(String(item.imdb_id || item.id || '')) &&
+        allowedTypes.includes(String(item.type || '').toLowerCase())
+      );
     }
-    candidates = candidates.filter(x => /^tt\d+$/.test(String(x.imdb_id || x.id || '')));
+
     candidates.sort((a,b) => {
-      const aa = normalizeTitle(a.name || a.title), bb = normalizeTitle(b.name || b.title);
-      const score = x => x === target ? 0 : (x.includes(target) || target.includes(x) ? 1 : 2);
-      return score(aa)-score(bb);
+      const aa = normalizeTitle(a.name || a.title);
+      const bb = normalizeTitle(b.name || b.title);
+      const score = value => value === target ? 0 :
+        (value.includes(target) || target.includes(value) ? 1 : 2);
+      return score(aa) - score(bb);
     });
+
     const match = candidates[0];
-    if (!match) throw new Error('لم يتم العثور على معرف المحتوى في Cinemeta أو كتالوجات الإضافات المثبتة.');
-    const id = String(match.imdb_id || match.id);
-    if (identity.isSeries && identity.season > 0 && identity.episode > 0) {
-      return {type:'series',id,resourceId:id+':'+identity.season+':'+identity.episode};
+    if (!match) {
+      throw new Error('لم يتم العثور على معرف المحتوى في Cinemeta أو كتالوجات الإضافات المثبتة.');
     }
-    return {type,id,resourceId:id};
+
+    const id = String(match.imdb_id || match.id);
+    const resolvedType = String(match.type || preferredType).toLowerCase();
+    if (resolvedType === 'series' && identity.season > 0 && identity.episode > 0) {
+      return {
+        type:'series',
+        id,
+        resourceId:id + ':' + identity.season + ':' + identity.episode
+      };
+    }
+    return {type:resolvedType,id,resourceId:id};
   }
   function normalizeLang(value) {
     const v = String(value || '').toLowerCase().replace('_','-');
