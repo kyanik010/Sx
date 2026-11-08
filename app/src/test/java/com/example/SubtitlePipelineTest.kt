@@ -37,6 +37,20 @@ class SubtitlePipelineTest {
     }
 
     @Test
+    fun parsesTtmlDurationBasedCues() {
+        val cues = SubtitlePipeline.parse(
+            """<tt><body><div><p begin="00:00:01.000" dur="2s">First</p><p begin="3s" end="00:00:05.000">Second</p></div></body></tt>""",
+            "ttml"
+        )
+        assertEquals(2, cues.size)
+        assertEquals(1_000L, cues[0].startMs)
+        assertEquals(3_000L, cues[0].endMs)
+        assertEquals("First", cues[0].text)
+        assertEquals(3_000L, cues[1].startMs)
+        assertEquals(5_000L, cues[1].endMs)
+    }
+
+    @Test
     fun detectsAndDecodesGzipPayload() {
         val raw = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello".toByteArray()
         val compressed = ByteArrayOutputStream().also { output ->
