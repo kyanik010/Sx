@@ -75,7 +75,7 @@ internal object OpenSubtitlesClient {
     /**
      * Performs subtitle search using OpenSubtitles REST API or fallback endpoints.
      */
-    fun search(query: String, lang: String = "ar", apiKey: String = ""): List<SubtitleSearchResult> {
+    fun search(query: String, lang: String = "ar", apiKey: String = BuildConfig.OPENSUBTITLES_API_KEY): List<SubtitleSearchResult> {
         val cleaned = cleanSearchQuery(query)
         if (cleaned.isBlank()) return emptyList()
 
@@ -145,12 +145,15 @@ internal object OpenSubtitlesClient {
     fun downloadAndDecode(
         rawUrl: String,
         fileId: Long = 0L,
-        apiKey: String = ""
+        apiKey: String = BuildConfig.OPENSUBTITLES_API_KEY
     ): Pair<String, String> { // Returns Pair<TextContent, Extension>
         var downloadLink = rawUrl
 
-        // If this is an OpenSubtitles fileId with API key, request download link first
-        if (fileId > 0L && apiKey.isNotBlank()) {
+        // OpenSubtitles file IDs must be resolved through its authenticated API.
+        if (fileId > 0L) {
+            require(apiKey.isNotBlank()) {
+                "مفتاح OpenSubtitles API غير مضبوط في إعدادات البناء"
+            }
             val conn = (URL("$BASE_URL/download").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 15000
@@ -162,14 +165,18 @@ internal object OpenSubtitlesClient {
                 doOutput = true
                 outputStream.use { it.write(JSONObject().put("file_id", fileId).toString().toByteArray()) }
             }
-
-            if (conn.responseCode == 200) {
-                val resp = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                val link = resp.optString("link", "")
-                if (link.isNotBlank()) {
-                    downloadLink = link
-                }
+            val code = conn.responseCode
+            require(code in 200..299) {
+                "فشل طلب رابط تنزيل OpenSubtitles (HTTP $code)"
             }
+            val resp = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            downloadLink = resp.optString("link", "")
+            require(downloadLink.startsWith("https://") || downloadLink.startsWith("http://")) {
+                "لم يُرجع OpenSubtitles رابط تنزيل صالحاً"
+            }
+        }
+        require(downloadLink.startsWith("https://") || downloadLink.startsWith("http://")) {
+            "رابط تنزيل الترجمة غير صالح"
         }
 
         val conn = (URL(downloadLink).openConnection() as HttpURLConnection).apply {
@@ -178,10 +185,6 @@ internal object OpenSubtitlesClient {
             readTimeout = 25000
             setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
             instanceFollowRedirects = true
-        }
-
-        require(conn.responseCode in 200..299) {
-            "فشل تنزيل ملف الترجمة (كود ${conn.responseCode})"
         }
 
         val rawBytes = conn.inputStream.use { input ->
