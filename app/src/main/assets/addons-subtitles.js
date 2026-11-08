@@ -82,6 +82,9 @@
   }
   async function nativeText(url) {
     const value = await nativeRequest('fetchTextAsync',[String(url)]);
+    if (!value || value.success !== true) {
+      throw new Error(value && value.error ? value.error : 'تعذر الاتصال بمصدر الإضافة.');
+    }
     return value.body || '';
   }
   async function nativeJson(url) { return JSON.parse(await nativeText(url)); }
@@ -275,15 +278,24 @@
     const isSeries = !!(item.subtitleSeries || item.seriesTitle || (typeof currentAppMode !== 'undefined' && currentAppMode === 'series'));
     const title = String(item.subtitleTitle || item.seriesTitle || item.name || '').trim();
     if (!title) throw new Error('اسم المحتوى غير متوفر للبحث.');
-    return {item,isSeries,title,season:Number(item.subtitleSeason || item.season || 0),episode:Number(item.subtitleEpisode || item.episode || 0)};
+    const episodeMatch = title.match(/(?:S(\d{1,2})E(\d{1,3})|(\d{1,2})x(\d{1,3}))/i);
+    const season = Number(item.subtitleSeason || item.season || episodeMatch?.[1] || episodeMatch?.[3] || 0);
+    const episode = Number(item.subtitleEpisode || item.episode || episodeMatch?.[2] || episodeMatch?.[4] || 0);
+    const searchTitle = title
+      .replace(/\b(19|20)\d{2}\b/g, '')
+      .replace(/\bS\d{1,2}E\d{1,3}\b|\b\d{1,2}x\d{1,3}\b/gi, '')
+      .replace(/[._]+/g, ' ')
+      .replace(/\s+/g, ' ').trim() || title;
+    return {item,isSeries,title,searchTitle,season,episode};
   }
   function normalizeTitle(value) { return String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu,''); }
   async function resolveImdb(identity) {
     const type = identity.isSeries ? 'series' : 'movie';
-    const target = normalizeTitle(identity.title);
+    const searchTitle = identity.searchTitle || identity.title;
+    const target = normalizeTitle(searchTitle);
     let candidates = [];
     try {
-      const url = 'https://v3-cinemeta.strem.io/catalog/' + type + '/top/search=' + encodeURIComponent(identity.title) + '.json';
+      const url = 'https://v3-cinemeta.strem.io/catalog/' + type + '/top/search=' + encodeURIComponent(searchTitle) + '.json';
       const data = await nativeJson(url);
       candidates = data && Array.isArray(data.metas) ? data.metas : [];
     } catch (_) {}
@@ -299,7 +311,7 @@
             if (!extras.some(extra => extra && extra.name === 'search')) continue;
             try {
               const data = await nativeJson(base + '/catalog/' + type + '/' +
-                encodeURIComponent(catalog.id) + '/search=' + encodeURIComponent(identity.title) + '.json');
+                encodeURIComponent(catalog.id) + '/search=' + encodeURIComponent(searchTitle) + '.json');
               if (data && Array.isArray(data.metas)) candidates.push(...data.metas);
             } catch (_) {}
           }
