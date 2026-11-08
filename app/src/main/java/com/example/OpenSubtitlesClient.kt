@@ -187,6 +187,10 @@ internal object OpenSubtitlesClient {
             instanceFollowRedirects = true
         }
 
+        val responseCode = conn.responseCode
+        require(responseCode in 200..299) {
+            "فشل تنزيل ملف الترجمة (كود $responseCode)"
+        }
         val rawBytes = conn.inputStream.use { input ->
             val out = ByteArrayOutputStream()
             val buf = ByteArray(8192)
