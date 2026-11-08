@@ -154,23 +154,37 @@ internal object OpenSubtitlesClient {
             require(apiKey.isNotBlank()) {
                 "مفتاح OpenSubtitles API غير مضبوط في إعدادات البناء"
             }
-            val conn = (URL("$BASE_URL/download").openConnection() as HttpURLConnection).apply {
+            val request = (URL("$BASE_URL/download").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 15000
                 readTimeout = 15000
                 setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
                 setRequestProperty("Api-Key", apiKey)
-                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Accept", "application/json")
                 doOutput = true
-                outputStream.use { it.write(JSONObject().put("file_id", fileId).toString().toByteArray()) }
             }
-            val code = conn.responseCode
-            require(code in 200..299) {
-                "فشل طلب رابط تنزيل OpenSubtitles (HTTP $code)"
+            try {
+                request.outputStream.use {
+                    it.write(JSONObject().put("file_id", fileId).toString().toByteArray(Charsets.UTF_8))
+                }
+                val code = request.responseCode
+                if (code !in 200..299) {
+                    val detail = request.errorStream?.bufferedReader()?.use { it.readText() }
+                        ?.take(300).orEmpty()
+                    throw IllegalStateException(
+                        if (code == 429 || code == 406) {
+                            "وصل OpenSubtitles إلى حد التنزيل المسموح. حاول لاحقاً."
+                        } else {
+                            "فشل طلب رابط تنزيل OpenSubtitles (HTTP $code)${if (detail.isBlank()) "" else ": $detail"}"
+                        }
+                    )
+                }
+                val responseBody = request.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                downloadLink = JSONObject(responseBody).optString("link", "")
+            } finally {
+                request.disconnect()
             }
-            val resp = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-            downloadLink = resp.optString("link", "")
             require(downloadLink.startsWith("https://") || downloadLink.startsWith("http://")) {
                 "لم يُرجع OpenSubtitles رابط تنزيل صالحاً"
             }
@@ -179,59 +193,51 @@ internal object OpenSubtitlesClient {
             "رابط تنزيل الترجمة غير صالح"
         }
 
-        val conn = (URL(downloadLink).openConnection() as HttpURLConnection).apply {
+        val connection = (URL(downloadLink).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 20000
             readTimeout = 25000
+            useCaches = false
             setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+            setRequestProperty(
+                "Accept",
+                "text/plain,text/vtt,application/x-subrip,application/octet-stream,application/zip,application/gzip,*/*"
+            )
+            setRequestProperty("Accept-Encoding", "gzip, deflate")
             instanceFollowRedirects = true
         }
-
-        val responseCode = conn.responseCode
-        require(responseCode in 200..299) {
-            "فشل تنزيل ملف الترجمة (كود $responseCode)"
-        }
-        val rawBytes = conn.inputStream.use { input ->
-            val out = ByteArrayOutputStream()
-            val buf = ByteArray(8192)
-            var total = 0
-            while (true) {
-                val len = input.read(buf)
-                if (len < 0) break
-                total += len
-                require(total <= 20 * 1024 * 1024) { "حجم ملف الترجمة يتجاوز 20MB" }
-                out.write(buf, 0, len)
-            }
-            out.toByteArray()
-        }
-
-        require(rawBytes.isNotEmpty()) { "ملف الترجمة فارغ" }
-
-        var bytes = rawBytes
-        var extension = "srt"
-
-        // Handle GZIP compression
-        if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
-            bytes = GZIPInputStream(ByteArrayInputStream(bytes)).use { it.readBytes() }
-        } else if (bytes.size >= 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte()) {
-            // Handle ZIP archive
-            ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
-                while (true) {
-                    val entry = zip.nextEntry ?: break
-                    if (entry.isDirectory) continue
-                    val ext = entry.name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-                    if (ext in listOf("srt", "vtt", "ass", "ssa", "sub", "ttml")) {
-                        extension = ext
-                        bytes = zip.readBytes()
-                        break
-                    }
+        try {
+            val responseCode = connection.responseCode
+            require(responseCode in 200..299) {
+                if (responseCode == 429 || responseCode == 406) {
+                    "وصل OpenSubtitles إلى حد التنزيل المسموح. حاول لاحقاً."
+                } else {
+                    "فشل تنزيل ملف الترجمة (HTTP $responseCode)"
                 }
             }
+            val rawBytes = connection.inputStream.use { input ->
+                val out = ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    require(total <= 20 * 1024 * 1024) { "حجم ملف الترجمة يتجاوز 20MB" }
+                    out.write(buffer, 0, count)
+                }
+                out.toByteArray()
+            }
+            val decoded = SubtitlePipeline.decodePayload(
+                rawBytes = rawBytes,
+                contentEncoding = connection.contentEncoding,
+                sourceUrl = connection.url.toString(),
+                contentDisposition = connection.getHeaderField("Content-Disposition")
+            )
+            return Pair(decoded.text, decoded.extension)
+        } finally {
+            connection.disconnect()
         }
-
-        // Decode text with Arabic-friendly fallbacks
-        val text = decodeSubtitleBytes(bytes)
-        return Pair(text, extension)
     }
 
     private fun decodeSubtitleBytes(bytes: ByteArray): String {
