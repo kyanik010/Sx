@@ -2895,27 +2895,140 @@
     }
 
     function classifyAudioSource(name, categoryName, categoryId) {
-      const searchable = (String(name || '') + ' ' + String(categoryName || '') + ' ' + String(categoryId || '')).toLowerCase().replace(/[\u064B-\u065F\u0670]/g, '').replace(/[أإآ]/g, 'ا').replace(/[^a-z0-9\u0600-\u06FF]+/g, ' ').trim();
-      const bein = ['bein sports','bein sport','beinsports','beinsport','be in sports','be in sport','بي ان سبورت','بي ان','بين سبورت'].some(term => searchable.includes(term));
-      if (bein) return 'BEIN SPORTS'; if (/\b(alwan|al wan)\b/.test(searchable) || searchable.includes('الوان')) return 'ALWAN'; return '';
+      const searchable = (String(name || '') + ' ' + String(categoryName || '') + ' ' + String(categoryId || ''))
+        .toLowerCase()
+        .replace(/[\u064B-\u065F\u0670]/g, '')
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .replace(/\b(hd|4k|fhd|sd|uhd|hevc|h265|\d{2}fps)\b/gi, ' ')
+        .replace(/[^a-z0-9\u0600-\u06FF]+/g, ' ')
+        .trim();
+      const bein = [
+        'bein sports','bein sport','beinsports','beinsport',
+        'be in sports','be in sport','بي ان سبورت','بي ان','بين سبورت',
+        'صوتيات بي ان','راديو بي ان','تعليق بي ان','صوتيات بين','تعليق بين'
+      ].some(term => searchable.includes(term));
+      if (bein) return 'BEIN_SPORTS';
+      const alwan = ['alwan', 'al wan', 'الوان', 'صوتيات الوان', 'راديو الوان', 'تعليق الوان', 'قنوات الوان']
+        .some(term => searchable.includes(term)) || /\b(alwan|al wan)\b/.test(searchable);
+      if (alwan) return 'ALWAN';
+      return '';
     }
+
     function renderAudioSourcePicker(filterText = '') {
-      const container = document.getElementById('audio-channels-list'); if (!container) return; container.replaceChildren();
+      const container = document.getElementById('audio-channels-list');
+      if (!container) return;
+      container.replaceChildren();
       const query = String(filterText || '').trim().toLowerCase();
-      const available = liveChannels.filter(ch => classifyAudioSource(ch.name, ch.categoryName, ch.category))
-        .filter(ch => !videoPlaybackController || !videoPlaybackController.currentItem || String(ch.id) !== String(videoPlaybackController.currentItem.id))
-        .filter(ch => !query || String(ch.name || '').toLowerCase().includes(query) || String(ch.categoryName || '').toLowerCase().includes(query));
-      const groups = [{name:'beIN SPORTS',items:available.filter(ch => classifyAudioSource(ch.name,ch.categoryName,ch.category)==='BEIN SPORTS')},{name:'ALWAN',items:available.filter(ch => classifyAudioSource(ch.name,ch.categoryName,ch.category)==='ALWAN')}];
-      let count = 0; groups.forEach(group => { if (!group.items.length) return;
-        const header = document.createElement('div'); header.style.cssText = 'padding:8px 4px 5px;color:var(--accent-gold);font-weight:800;font-size:0.8rem;'; header.textContent = group.name + ' (' + group.items.length + ')'; container.appendChild(header);
-        group.items.forEach(ch => { const item = document.createElement('div'); const selected = dualAudioEngine && dualAudioEngine.selectedSourceChannel && String(dualAudioEngine.selectedSourceChannel.id)===String(ch.id);
-          item.className = 'audio-picker-item focusable' + (selected ? ' active' : ''); item.tabIndex = 0; item.dataset.channelId = String(ch.id);
-          const name = document.createElement('span'); name.textContent = String(ch.number || '') + '. ' + String(ch.name || '');
-          const category = document.createElement('span'); category.style.cssText = 'font-size:0.7rem;color:var(--text-muted);'; category.textContent = ch.categoryName || '';
-          item.append(name,category); item.addEventListener('click',()=>dualAudioEngine.setSourceChannel(ch)); container.appendChild(item); count++;
+
+      let alwanStations = [];
+      let beinStations = [];
+
+      // 1. Try to load pre-discovered stations from native XtreamBridge repository
+      if (window.XtreamBridge && typeof window.XtreamBridge.getDiscoveredRadioStations === 'function') {
+        try {
+          const raw = window.XtreamBridge.getDiscoveredRadioStations();
+          const parsed = JSON.parse(raw || '{}');
+          if (parsed && parsed.success) {
+            alwanStations = Array.isArray(parsed.alwan) ? parsed.alwan : [];
+            beinStations = Array.isArray(parsed.bein) ? parsed.bein : [];
+          }
+        } catch (e) {
+          console.warn('Failed to parse discovered radio stations from native bridge', e);
+        }
+      }
+
+      // 2. If native bridge returned no stations yet, discover dynamically from liveChannels
+      if (!alwanStations.length && !beinStations.length && Array.isArray(liveChannels) && liveChannels.length > 0) {
+        liveChannels.forEach(ch => {
+          const cls = classifyAudioSource(ch.name, ch.categoryName, ch.category);
+          if (cls === 'ALWAN') alwanStations.push(ch);
+          else if (cls === 'BEIN_SPORTS') beinStations.push(ch);
+        });
+      }
+
+      // Filter by current playing video (don't allow picking current video stream as external audio)
+      const currentVideoId = videoPlaybackController && videoPlaybackController.currentItem ? String(videoPlaybackController.currentItem.id) : null;
+      const filterItem = ch => {
+        if (currentVideoId && String(ch.id) === currentVideoId) return false;
+        if (!query) return true;
+        const name = String(ch.name || '').toLowerCase();
+        const cat = String(ch.categoryName || '').toLowerCase();
+        return name.includes(query) || cat.includes(query);
+      };
+
+      const groups = [
+        { name: 'ALWAN (ألوان)', key: 'alwan', items: alwanStations.filter(filterItem) },
+        { name: 'beIN SPORTS (بي إن سبورت)', key: 'bein', items: beinStations.filter(filterItem) }
+      ];
+
+      let totalCount = 0;
+      groups.forEach(group => {
+        if (!group.items.length) return;
+        const header = document.createElement('div');
+        header.style.cssText = 'padding:10px 4px 6px;color:var(--accent-gold);font-weight:800;font-size:0.85rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:6px;';
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = group.name;
+        const countBadge = document.createElement('span');
+        countBadge.style.cssText = 'background:rgba(218,165,32,0.18);color:var(--accent-gold);padding:2px 8px;border-radius:12px;font-size:0.75rem;';
+        countBadge.textContent = group.items.length + ' محطة';
+        header.append(titleSpan, countBadge);
+        container.appendChild(header);
+
+        group.items.forEach(ch => {
+          const item = document.createElement('div');
+          const isSelected = dualAudioEngine && dualAudioEngine.selectedSourceChannel && String(dualAudioEngine.selectedSourceChannel.id) === String(ch.id);
+          const isPlaying = isSelected && dualAudioEngine && dualAudioEngine.isActive;
+          item.className = 'audio-picker-item focusable' + (isSelected ? ' active' : '') + (isPlaying ? ' is-playing' : '');
+          item.tabIndex = 0;
+          item.dataset.channelId = String(ch.id);
+
+          const leftBox = document.createElement('div');
+          leftBox.style.cssText = 'display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;';
+
+          const nameSpan = document.createElement('span');
+          nameSpan.style.cssText = 'font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+          nameSpan.textContent = (ch.number ? ch.number + '. ' : '') + String(ch.name || '');
+
+          const catSpan = document.createElement('span');
+          catSpan.style.cssText = 'font-size:0.72rem;color:var(--text-muted);';
+          catSpan.textContent = ch.categoryName || (group.key === 'alwan' ? 'صوتيات ألوان' : 'صوتيات beIN');
+
+          leftBox.append(nameSpan, catSpan);
+
+          const statusBadge = document.createElement('span');
+          statusBadge.style.cssText = 'font-size:0.75rem;font-weight:700;padding:4px 10px;border-radius:6px;white-space:nowrap;';
+          if (isPlaying) {
+            statusBadge.style.cssText += 'background:rgba(0,255,102,0.15);color:#00FF66;border:1px solid rgba(0,255,102,0.4);';
+            statusBadge.textContent = '🔊 يعمل الآن';
+          } else if (isSelected) {
+            statusBadge.style.cssText += 'background:rgba(79,156,249,0.15);color:var(--focus-blue);border:1px solid rgba(79,156,249,0.4);';
+            statusBadge.textContent = 'محدد';
+          } else {
+            statusBadge.style.cssText += 'background:rgba(255,255,255,0.06);color:var(--text-muted);';
+            statusBadge.textContent = 'تشغيل';
+          }
+
+          item.append(leftBox, statusBadge);
+          item.addEventListener('click', () => {
+            dualAudioEngine.setSourceChannel(ch);
+            renderAudioSourcePicker(query);
+          });
+          container.appendChild(item);
+          totalCount++;
         });
       });
-      if (!count) { const empty = document.createElement('div'); empty.className = 'audio-picker-item'; empty.textContent = 'لا توجد مصادر صوت beIN SPORTS أو ALWAN في بيانات اشتراكك'; container.appendChild(empty); }
+
+      if (!totalCount) {
+        const empty = document.createElement('div');
+        empty.className = 'audio-picker-item';
+        empty.style.cssText = 'text-align:center;padding:24px 16px;color:var(--text-muted);';
+        empty.textContent = query
+          ? 'لا توجد محطات صوت مطابقة للبحث'
+          : 'لا توجد مصادر صوت beIN SPORTS أو ALWAN في بيانات اشتراكك';
+        container.appendChild(empty);
+      }
     }
     function updateFavoriteButtons(itemId) {
       const isFav = isFavorite(itemId);

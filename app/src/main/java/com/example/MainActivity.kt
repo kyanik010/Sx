@@ -1175,7 +1175,7 @@ class MainActivity : ComponentActivity() {
         if (generation != externalAudioGeneration || !externalAudioActive) return
         releaseSecondaryAudio()
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(4000, 25000, 1500, 2500)
+            .setBufferDurationsMs(3000, 20000, 1000, 2000)
             .build()
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(httpUserAgent)
