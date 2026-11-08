@@ -388,14 +388,14 @@
         const addons = installed.filter(x => x.enabled !== false && (x.resources || []).some(r => String(r).toLowerCase() === 'subtitles'));
         const batches = await Promise.all(addons.map(async addon => {
           try {
-            const base = addon.url.replace(/\\/manifest\\.json(?:\\?.*)?$/,'').replace(/\\/+$/,'');
+            const base = addon.url.replace(/\/manifest\.json(?:\?.*)?$/,'').replace(/\/+$/,'');
             const url = base + '/subtitles/' + imdb.type + '/' + encodeURIComponent(imdb.resourceId) + '.json';
             const payload = await nativeJson(url);
             const rows = payload && Array.isArray(payload.subtitles) ? payload.subtitles : [];
             return rows.map(row => {
               const lang = normalizeLang(row.lang);
               if (subtitleLanguage !== 'all' && lang !== subtitleLanguage && !lang.startsWith(subtitleLanguage+'-')) return null;
-              if (!/^https?:\\/\\//i.test(String(row.url || ''))) return null;
+              if (!/^https?:\/\//i.test(String(row.url || ''))) return null;
               return {
                 url: row.url,
                 label: row.label || row.lang || addon.name,
