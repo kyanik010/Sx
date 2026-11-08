@@ -21,9 +21,12 @@
       types:['movie','series'], resources:['subtitles'], enabled:true }
   ];
   const LANGUAGES = [
-    {label:'Hindi',code:'hi'},{label:'Urdu',code:'ur'},
-    {label:'Arabic',code:'ar'},{label:'English',code:'en'},
-    {label:'All',code:'all'}
+    {label:'All',code:'all'},{label:'English',code:'en'},
+    {label:'Arabic',code:'ar'},{label:'Urdu',code:'ur'},
+    {label:'Hindi',code:'hi'},{label:'Spanish',code:'es'},
+    {label:'French',code:'fr'},{label:'German',code:'de'},
+    {label:'Portuguese',code:'pt'},{label:'Italian',code:'it'},
+    {label:'Turkish',code:'tr'},{label:'Russian',code:'ru'}
   ];
   const FONTS = ['Reem Kufi','Aref Ruqaa','Lalezar','Amiri','Rakkas','Marhey','Noto Naskh','Changa','Noto Kufi','Lemonada'];
   let installed = [];
