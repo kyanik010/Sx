@@ -62,7 +62,7 @@ internal object OpenSubtitlesClient {
         // Remove country prefixes like "AR: ", "|AR| ", "EN - ", "[FR] "
         q = q.replace(Regex("""^(?:\[[A-Za-z0-9_-]+\]|\|[A-Za-z0-9_-]+\||[A-Za-z]{2,3}\s*[:\-|])\s*"""), "")
         // Remove common IPTV markers
-        q = q.replace(Regex("""(?i)\b(?:4k|uhd|fhd|hd|sd|1080p|720p|2160p|h264|h265|hevc|x264|x265|web-?dl|bluray|rip|aac|mp3|dubbed|subbed)\b"""), "")
+        q = q.replace(Regex("""(?i)\b(?:4k|uhd|fhd|hd|sd|1080p|720p|2160p|h264|h265|hevc|x264|x265|web-?dl|bluray|bdrip|dvdrip|rip|aac|mp3|dubbed|subbed|remux|hdr|dv)\b"""), "")
         // Remove Arabic quality / translation keywords
         q = q.replace(Regex("""(?:مترجم|مدبلج|نسخة|أصلية|حصريا|جودة|عالية|كاملة)"""), "")
         // Remove brackets and years inside brackets
