@@ -21,9 +21,12 @@
       types:['movie','series'], resources:['subtitles'], enabled:true }
   ];
   const LANGUAGES = [
-    {label:'Hindi',code:'hi'},{label:'Urdu',code:'ur'},
-    {label:'Arabic',code:'ar'},{label:'English',code:'en'},
-    {label:'All',code:'all'}
+    {label:'All',code:'all'},{label:'English',code:'en'},
+    {label:'Arabic',code:'ar'},{label:'Urdu',code:'ur'},
+    {label:'Hindi',code:'hi'},{label:'Spanish',code:'es'},
+    {label:'French',code:'fr'},{label:'German',code:'de'},
+    {label:'Portuguese',code:'pt'},{label:'Italian',code:'it'},
+    {label:'Turkish',code:'tr'},{label:'Russian',code:'ru'}
   ];
   const FONTS = ['Reem Kufi','Aref Ruqaa','Lalezar','Amiri','Rakkas','Marhey','Noto Naskh','Changa','Noto Kufi','Lemonada'];
   let installed = [];
@@ -82,6 +85,9 @@
   }
   async function nativeText(url) {
     const value = await nativeRequest('fetchTextAsync',[String(url)]);
+    if (!value || value.success !== true) {
+      throw new Error(value && value.error ? value.error : 'تعذر الاتصال بمصدر الإضافة.');
+    }
     return value.body || '';
   }
   async function nativeJson(url) { return JSON.parse(await nativeText(url)); }
@@ -272,57 +278,118 @@
     if (typeof currentAppMode !== 'undefined' && currentAppMode === 'live') {
       throw new Error('البحث عن الترجمة متاح للأفلام والمسلسلات فقط.');
     }
-    const isSeries = !!(item.subtitleSeries || item.seriesTitle || (typeof currentAppMode !== 'undefined' && currentAppMode === 'series'));
     const title = String(item.subtitleTitle || item.seriesTitle || item.name || '').trim();
     if (!title) throw new Error('اسم المحتوى غير متوفر للبحث.');
-    return {item,isSeries,title,season:Number(item.subtitleSeason || item.season || 0),episode:Number(item.subtitleEpisode || item.episode || 0)};
+    const episodeMatch = title.match(/(?:S(\d{1,2})E(\d{1,3})|(\d{1,2})x(\d{1,3}))/i);
+    // Lumen treats an explicit season/episode marker or episode progress key as
+    // authoritative series evidence even when the player item lacks series metadata.
+    const progressKey = String(item.progressKey || '');
+    const isSeries = !!(item.subtitleSeries || item.seriesTitle ||
+      (typeof currentAppMode !== 'undefined' && currentAppMode === 'series') ||
+      episodeMatch || progressKey.startsWith('ep:'));
+    const season = Number(item.subtitleSeason || item.season || episodeMatch?.[1] || episodeMatch?.[3] || 0);
+    const episode = Number(item.subtitleEpisode || item.episode || episodeMatch?.[2] || episodeMatch?.[4] || 0);
+    const searchTitle = title
+      .replace(/\b(19|20)\d{2}\b/g, '')
+      .replace(/\bS\d{1,2}E\d{1,3}\b|\b\d{1,2}x\d{1,3}\b/gi, '')
+      .replace(/[._]+/g, ' ')
+      .replace(/\s+/g, ' ').trim() || title;
+    return {item,isSeries,title,searchTitle,season,episode};
   }
   function normalizeTitle(value) { return String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu,''); }
-  async function resolveImdb(identity) {
-    const type = identity.isSeries ? 'series' : 'movie';
-    const target = normalizeTitle(identity.title);
+  async function resolveImdb(identity, providerErrors) {
+    const preferredType = identity.isSeries ? 'series' : 'movie';
+    const searchTitle = identity.searchTitle || identity.title;
+    const target = normalizeTitle(searchTitle);
     let candidates = [];
+
+    // Match Lumen's identity resolution: try Cinemeta first, then search-enabled
+    // catalogs from installed addons if Cinemeta has no usable IMDb identity.
     try {
-      const url = 'https://v3-cinemeta.strem.io/catalog/' + type + '/top/search=' + encodeURIComponent(identity.title) + '.json';
+      const url = 'https://v3-cinemeta.strem.io/catalog/' + preferredType +
+        '/top/search=' + encodeURIComponent(searchTitle) + '.json';
       const data = await nativeJson(url);
       candidates = data && Array.isArray(data.metas) ? data.metas : [];
-    } catch (_) {}
-    if (!candidates.some(x => /^tt\d+$/.test(String(x.imdb_id || x.id || '')))) {
-      // Fallback to search-enabled catalogs installed by the user, as in Lumen.
-      for (const addon of installed.filter(x => x.enabled !== false)) {
-        try {
-          const manifest = await nativeJson(addon.url);
-          const base = addon.url.replace(/\/manifest\.json(?:\?.*)?$/,'').replace(/\/+$/,'');
-          for (const catalog of (Array.isArray(manifest.catalogs) ? manifest.catalogs : [])) {
-            if (catalog.type !== type || !catalog.id) continue;
-            const extras = Array.isArray(catalog.extra) ? catalog.extra : [];
-            if (!extras.some(extra => extra && extra.name === 'search')) continue;
-            try {
-              const data = await nativeJson(base + '/catalog/' + type + '/' +
-                encodeURIComponent(catalog.id) + '/search=' + encodeURIComponent(identity.title) + '.json');
-              if (data && Array.isArray(data.metas)) candidates.push(...data.metas);
-            } catch (_) {}
+    } catch (error) {
+      providerErrors.push('Cinemeta: ' + (error.message || 'تعذر الوصول إلى كتالوج Cinemeta'));
+    }
+
+    candidates = candidates.filter(item =>
+      /^tt\d+$/.test(String(item.imdb_id || item.id || ''))
+    );
+
+    if (!candidates.length) {
+      const allowedTypes = identity.isSeries ? ['series'] : ['movie', 'series'];
+      const addonBatches = await Promise.all(installed
+        .filter(addon => addon.enabled !== false)
+        .map(async addon => {
+          try {
+            const manifest = await nativeJson(addon.url);
+            const base = addon.url
+              .replace(/\/manifest\.json(?:\?.*)?$/, '')
+              .replace(/\/+$/, '');
+            const catalogs = (Array.isArray(manifest.catalogs) ? manifest.catalogs : [])
+              .filter(catalog => allowedTypes.includes(catalog.type) && catalog.id &&
+                Array.isArray(catalog.extra) &&
+                catalog.extra.some(extra => extra && extra.name === 'search'));
+
+            const catalogBatches = await Promise.all(catalogs.map(async catalog => {
+              try {
+                const url = base + '/catalog/' + catalog.type + '/' +
+                  encodeURIComponent(catalog.id) + '/search=' +
+                  encodeURIComponent(searchTitle) + '.json';
+                const data = await nativeJson(url);
+                return (data && Array.isArray(data.metas) ? data.metas : [])
+                  .map(meta => ({...meta, type:meta.type || catalog.type}));
+              } catch (error) {
+                providerErrors.push('Stremio catalog (' + catalog.id + '): ' + (error.message || 'تعذر البحث في الكتالوج'));
+                return [];
+              }
+            }));
+            return catalogBatches.flat();
+          } catch (error) {
+            providerErrors.push('Stremio (' + addon.name + '): ' + (error.message || 'تعذر قراءة Manifest'));
+            return [];
           }
-        } catch (_) {}
-      }
+        }));
+      candidates = addonBatches.flat().filter(item =>
+        /^tt\d+$/.test(String(item.imdb_id || item.id || '')) &&
+        allowedTypes.includes(String(item.type || '').toLowerCase())
+      );
     }
-    candidates = candidates.filter(x => /^tt\d+$/.test(String(x.imdb_id || x.id || '')));
+
     candidates.sort((a,b) => {
-      const aa = normalizeTitle(a.name || a.title), bb = normalizeTitle(b.name || b.title);
-      const score = x => x === target ? 0 : (x.includes(target) || target.includes(x) ? 1 : 2);
-      return score(aa)-score(bb);
+      const aa = normalizeTitle(a.name || a.title);
+      const bb = normalizeTitle(b.name || b.title);
+      const score = value => value === target ? 0 :
+        (value.includes(target) || target.includes(value) ? 1 : 2);
+      return score(aa) - score(bb);
     });
+
     const match = candidates[0];
-    if (!match) throw new Error('لم يتم العثور على معرف المحتوى في Cinemeta أو كتالوجات الإضافات المثبتة.');
-    const id = String(match.imdb_id || match.id);
-    if (identity.isSeries && identity.season > 0 && identity.episode > 0) {
-      return {type:'series',id,resourceId:id+':'+identity.season+':'+identity.episode};
+    if (!match) {
+      throw new Error('لم يتم العثور على معرف المحتوى في Cinemeta أو كتالوجات الإضافات المثبتة.');
     }
-    return {type,id,resourceId:id};
+
+    const id = String(match.imdb_id || match.id);
+    const resolvedType = String(match.type || preferredType).toLowerCase();
+    if (resolvedType === 'series' && identity.season > 0 && identity.episode > 0) {
+      return {
+        type:'series',
+        id,
+        resourceId:id + ':' + identity.season + ':' + identity.episode
+      };
+    }
+    return {type:resolvedType,id,resourceId:id};
   }
   function normalizeLang(value) {
     const v = String(value || '').toLowerCase().replace('_','-');
-    const aliases = {ara:'ar',eng:'en',hin:'hi',urd:'ur'};
+    const aliases = {
+      ara:'ar', ar:'ar', eng:'en', hin:'hi', urd:'ur',
+      spa:'es', fre:'fr', fra:'fr', deu:'de', ger:'de', ita:'it',
+      por:'pt', rus:'ru', nld:'nl', tur:'tr', zho:'zh', chi:'zh',
+      jpn:'ja', kor:'ko', fas:'fa', per:'fa'
+    };
     return aliases[v] || v;
   }
   async function searchOnline() {
@@ -337,6 +404,7 @@
       const identity = activeIdentity();
       const results = [];
       const seen = new Set();
+      const providerErrors = [];
 
       const rawTitle = identity.title || '';
       const cleanTitle = rawTitle
@@ -365,38 +433,47 @@
             });
           }
         } catch (e) {
+          providerErrors.push('OpenSubtitles: ' + (e.message || 'تعذر البحث'));
           console.warn('Native OpenSubtitles search error:', e);
         }
       }
 
-      // 2. Query configured Stremio subtitle addons
+      // 2. Query configured Stremio subtitle addons concurrently, matching Lumen's
+      // parallel addon fan-out so one slow provider does not delay every other result.
       try {
-        const imdb = await resolveImdb(identity);
+        const imdb = await resolveImdb(identity, providerErrors);
         const addons = installed.filter(x => x.enabled !== false && (x.resources || []).some(r => String(r).toLowerCase() === 'subtitles'));
-        for (const addon of addons) {
+        const batches = await Promise.all(addons.map(async addon => {
           try {
             const base = addon.url.replace(/\/manifest\.json(?:\?.*)?$/,'').replace(/\/+$/,'');
             const url = base + '/subtitles/' + imdb.type + '/' + encodeURIComponent(imdb.resourceId) + '.json';
             const payload = await nativeJson(url);
             const rows = payload && Array.isArray(payload.subtitles) ? payload.subtitles : [];
-            rows.forEach(row => {
+            return rows.map(row => {
               const lang = normalizeLang(row.lang);
-              if (subtitleLanguage !== 'all' && lang !== subtitleLanguage && !lang.startsWith(subtitleLanguage+'-')) return;
-              if (!/^https?:\/\//i.test(String(row.url || ''))) return;
-              const key = row.url;
-              if (!seen.has(key)) {
-                seen.add(key);
-                results.push({
-                  url: row.url,
-                  label: row.label || row.lang || addon.name,
-                  language: lang,
-                  addon: addon.name
-                });
-              }
-            });
-          } catch (error) { console.warn('Subtitle addon failed: ' + addon.name, error); }
-        }
+              if (subtitleLanguage !== 'all' && lang !== subtitleLanguage && !lang.startsWith(subtitleLanguage+'-')) return null;
+              if (!/^https?:\/\//i.test(String(row.url || ''))) return null;
+              return {
+                url: row.url,
+                label: row.label || row.lang || addon.name,
+                language: lang,
+                addon: addon.name
+              };
+            }).filter(Boolean);
+          } catch (error) {
+            providerErrors.push('Stremio (' + addon.name + '): ' + (error.message || 'تعذر تحميل الترجمات'));
+            console.warn('Subtitle addon failed: ' + addon.name, error);
+            return [];
+          }
+        }));
+        batches.forEach(batch => batch.forEach(entry => {
+          if (!seen.has(entry.url)) {
+            seen.add(entry.url);
+            results.push(entry);
+          }
+        }));
       } catch (imdbErr) {
+        providerErrors.push('Stremio: ' + (imdbErr.message || 'تعذر تحديد هوية الفيلم أو الحلقة'));
         console.warn('IMDb resolution skipped or failed:', imdbErr);
       }
 
@@ -405,9 +482,14 @@
       renderSubtitleResults();
 
       if (status) {
+        const providerWarning = providerErrors.length
+          ? ' · تعذر الاتصال ببعض المصادر: ' + providerErrors.join('؛ ')
+          : '';
         status.textContent = subtitleResults.length
-          ? 'تم العثور على ' + subtitleResults.length + ' ترجمة'
-          : 'لم يتم العثور على ترجمة لهذه اللغة. جرّب اختيار (الكل) أو إضافة ملف ترجمة محلي.';
+          ? 'تم العثور على ' + subtitleResults.length + ' ترجمة' + providerWarning
+          : (providerErrors.length
+              ? 'لم تُرجع المصادر نتائج. ' + providerErrors.join('؛ ') + ' · جرّب إضافة مصدر Stremio أو ملف ترجمة محلي.'
+              : 'لم يتم العثور على ترجمة لهذه اللغة. جرّب اختيار (الكل) أو إضافة ملف ترجمة محلي.');
       }
     } catch (error) {
       if (status) status.textContent = error.message || 'تعذر البحث عن الترجمة.';

@@ -42,6 +42,7 @@ import javax.crypto.spec.SecretKeySpec
 class XtreamBridge(context: Context) {
     private val appContext = context.applicationContext
     private val vault = CredentialVault(appContext)
+    val radioStationRepository = RadioStationRepository(appContext)
     private val catalogExecutor = Executors.newFixedThreadPool(3)
     private val catalogJobs = ConcurrentHashMap<String, Future<*>>()
     private val catalogTokens = ConcurrentHashMap<String, AtomicBoolean>()
@@ -244,6 +245,18 @@ class XtreamBridge(context: Context) {
                 stream.fd.sync()
             }
             android.system.Os.rename(temp.absolutePath, target.absolutePath)
+            if (section == "live") {
+                try {
+                    val root = JSONObject(payload)
+                    val categories = root.optJSONArray("categories") ?: JSONArray()
+                    val items = root.optJSONArray("items") ?: JSONArray()
+                    if (items.length() > 0) {
+                        radioStationRepository.discoverAndSave(server, username, categories, items)
+                    }
+                } catch (e: Throwable) {
+                    android.util.Log.w("SONIX", "Failed to discover radio stations from live section", e)
+                }
+            }
         } catch (error: Throwable) {
             temp.delete()
             throw error
@@ -477,9 +490,49 @@ class XtreamBridge(context: Context) {
     fun logout(): String {
         vault.clear()
         clearCatalogCache()
+        radioStationRepository.clearAll()
         try { CatalogRefreshScheduler.cancel(appContext) }
         catch (scheduleError: Exception) { android.util.Log.w("SONIX", "Could not cancel background catalog refresh", scheduleError) }
         return JSONObject().put("success", true).toString()
+    }
+
+    @JavascriptInterface
+    fun getDiscoveredRadioStations(): String {
+        return try {
+            val credentials = vault.read() ?: throw IllegalStateException("سجّل الدخول أولاً")
+            var stations = radioStationRepository.loadStations(credentials.server, credentials.username)
+            if (stations.isEmpty()) {
+                val liveFile = sectionCacheFile(credentials.server, credentials.username, "live")
+                if (liveFile.isFile && liveFile.length() > 0L) {
+                    val liveJson = JSONObject(liveFile.readText(Charsets.UTF_8))
+                    val categories = liveJson.optJSONArray("categories") ?: JSONArray()
+                    val items = liveJson.optJSONArray("items") ?: JSONArray()
+                    if (items.length() > 0) {
+                        stations = radioStationRepository.discoverAndSave(credentials.server, credentials.username, categories, items)
+                    }
+                }
+            }
+            radioStationRepository.getStationsJsonPayload(credentials.server, credentials.username).toString()
+        } catch (error: Throwable) {
+            errorResult(error)
+        }
+    }
+
+    @JavascriptInterface
+    fun refreshRadioStations(): String {
+        return try {
+            val credentials = vault.read() ?: throw IllegalStateException("سجّل الدخول أولاً")
+            val liveFile = sectionCacheFile(credentials.server, credentials.username, "live")
+            if (liveFile.isFile && liveFile.length() > 0L) {
+                val liveJson = JSONObject(liveFile.readText(Charsets.UTF_8))
+                val categories = liveJson.optJSONArray("categories") ?: JSONArray()
+                val items = liveJson.optJSONArray("items") ?: JSONArray()
+                radioStationRepository.discoverAndSave(credentials.server, credentials.username, categories, items)
+            }
+            radioStationRepository.getStationsJsonPayload(credentials.server, credentials.username).toString()
+        } catch (error: Throwable) {
+            errorResult(error)
+        }
     }
 
     fun buildPlaybackUri(type: String, streamId: String, extension: String): Uri {

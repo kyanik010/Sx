@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.util.Properties
 
 plugins {
   alias(libs.plugins.android.application)
@@ -11,6 +12,20 @@ plugins {
 val appVersionCode: Int = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
 val appVersionName: String = System.getenv("VERSION_NAME") ?: "1.0.0"
 
+// Read the optional key as data, then quote it explicitly for Java BuildConfig.
+// The Secrets plugin emits raw Java expressions, so an empty .env value would
+// otherwise generate the invalid expression: OPENSUBTITLES_API_KEY = ;
+val openSubtitlesApiKey: String =
+  providers.environmentVariable("OPENSUBTITLES_API_KEY").orNull
+    ?: rootProject.file(".env").takeIf { it.isFile }?.let { envFile ->
+      Properties().apply { envFile.inputStream().use { load(it) } }
+        .getProperty("OPENSUBTITLES_API_KEY")
+    }.orEmpty()
+
+val escapedOpenSubtitlesApiKey = openSubtitlesApiKey
+  .replace("\\", "\\\\")
+  .replace("\"", "\\\"")
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -22,6 +37,7 @@ android {
     versionCode = appVersionCode
     versionName = appVersionName
 
+    buildConfigField("String", "OPENSUBTITLES_API_KEY", "\"$escapedOpenSubtitlesApiKey\"")
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
@@ -48,13 +64,13 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
+      // Do not remove or modify this signingConfig assignment. It is necessary for building,
+      // installing, and updating Android apps in AI Studio.
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
+      // Do not remove or modify this signingConfig assignment. It is necessary for building,
+      // installing, and updating Android apps in AI Studio.
       signingConfig = signingConfigs.getByName("debugConfig")
     }
   }
@@ -79,6 +95,8 @@ secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  // This key is added above with explicit Java-string escaping instead.
+  ignoreList.add("OPENSUBTITLES_API_KEY")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
