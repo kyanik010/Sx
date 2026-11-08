@@ -305,7 +305,7 @@
     } catch (_) {}
 
     candidates = candidates.filter(item =>
-      /^tt\\d+$/.test(String(item.imdb_id || item.id || ''))
+      /^tt\d+$/.test(String(item.imdb_id || item.id || ''))
     );
 
     if (!candidates.length) {
@@ -316,8 +316,8 @@
           try {
             const manifest = await nativeJson(addon.url);
             const base = addon.url
-              .replace(/\\/manifest\\.json(?:\\?.*)?$/, '')
-              .replace(/\\/+$/, '');
+              .replace(/\/manifest\.json(?:\?.*)?$/, '')
+              .replace(/\/+$/, '');
             const catalogs = (Array.isArray(manifest.catalogs) ? manifest.catalogs : [])
               .filter(catalog => allowedTypes.includes(catalog.type) && catalog.id &&
                 Array.isArray(catalog.extra) &&
@@ -341,7 +341,7 @@
           }
         }));
       candidates = addonBatches.flat().filter(item =>
-        /^tt\\d+$/.test(String(item.imdb_id || item.id || '')) &&
+        /^tt\d+$/.test(String(item.imdb_id || item.id || '')) &&
         allowedTypes.includes(String(item.type || '').toLowerCase())
       );
     }
