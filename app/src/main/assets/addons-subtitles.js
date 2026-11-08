@@ -294,7 +294,7 @@
     return {item,isSeries,title,searchTitle,season,episode};
   }
   function normalizeTitle(value) { return String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu,''); }
-  async function resolveImdb(identity) {
+  async function resolveImdb(identity, providerErrors) {
     const preferredType = identity.isSeries ? 'series' : 'movie';
     const searchTitle = identity.searchTitle || identity.title;
     const target = normalizeTitle(searchTitle);
@@ -307,7 +307,9 @@
         '/top/search=' + encodeURIComponent(searchTitle) + '.json';
       const data = await nativeJson(url);
       candidates = data && Array.isArray(data.metas) ? data.metas : [];
-    } catch (_) {}
+    } catch (error) {
+      providerErrors.push('Cinemeta: ' + (error.message || 'تعذر الوصول إلى كتالوج Cinemeta'));
+    }
 
     candidates = candidates.filter(item =>
       /^tt\d+$/.test(String(item.imdb_id || item.id || ''))
@@ -336,12 +338,14 @@
                 const data = await nativeJson(url);
                 return (data && Array.isArray(data.metas) ? data.metas : [])
                   .map(meta => ({...meta, type:meta.type || catalog.type}));
-              } catch (_) {
+              } catch (error) {
+                providerErrors.push('Stremio catalog (' + catalog.id + '): ' + (error.message || 'تعذر البحث في الكتالوج'));
                 return [];
               }
             }));
             return catalogBatches.flat();
-          } catch (_) {
+          } catch (error) {
+            providerErrors.push('Stremio (' + addon.name + '): ' + (error.message || 'تعذر قراءة Manifest'));
             return [];
           }
         }));
@@ -377,7 +381,12 @@
   }
   function normalizeLang(value) {
     const v = String(value || '').toLowerCase().replace('_','-');
-    const aliases = {ara:'ar',eng:'en',hin:'hi',urd:'ur'};
+    const aliases = {
+      ara:'ar', ar:'ar', eng:'en', hin:'hi', urd:'ur',
+      spa:'es', fre:'fr', fra:'fr', deu:'de', ger:'de', ita:'it',
+      por:'pt', rus:'ru', nld:'nl', tur:'tr', zho:'zh', chi:'zh',
+      jpn:'ja', kor:'ko', fas:'fa', per:'fa'
+    };
     return aliases[v] || v;
   }
   async function searchOnline() {
@@ -429,7 +438,7 @@
       // 2. Query configured Stremio subtitle addons concurrently, matching Lumen's
       // parallel addon fan-out so one slow provider does not delay every other result.
       try {
-        const imdb = await resolveImdb(identity);
+        const imdb = await resolveImdb(identity, providerErrors);
         const addons = installed.filter(x => x.enabled !== false && (x.resources || []).some(r => String(r).toLowerCase() === 'subtitles'));
         const batches = await Promise.all(addons.map(async addon => {
           try {
@@ -449,6 +458,7 @@
               };
             }).filter(Boolean);
           } catch (error) {
+            providerErrors.push('Stremio (' + addon.name + '): ' + (error.message || 'تعذر تحميل الترجمات'));
             console.warn('Subtitle addon failed: ' + addon.name, error);
             return [];
           }
@@ -460,6 +470,7 @@
           }
         }));
       } catch (imdbErr) {
+        providerErrors.push('Stremio: ' + (imdbErr.message || 'تعذر تحديد هوية الفيلم أو الحلقة'));
         console.warn('IMDb resolution skipped or failed:', imdbErr);
       }
 
