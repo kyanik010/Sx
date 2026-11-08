@@ -78,64 +78,68 @@ internal object OpenSubtitlesClient {
     fun search(query: String, lang: String = "ar", apiKey: String = BuildConfig.OPENSUBTITLES_API_KEY): List<SubtitleSearchResult> {
         val cleaned = cleanSearchQuery(query)
         if (cleaned.isBlank()) return emptyList()
-
-        val results = mutableListOf<SubtitleSearchResult>()
-
-        // 1. If an OpenSubtitles API key is available or configured, query OpenSubtitles REST API v1
-        if (apiKey.isNotBlank()) {
-            try {
-                val encodedQuery = URLEncoder.encode(cleaned, "UTF-8")
-                val langParam = if (lang != "all") "&languages=$lang" else ""
-                val targetUrl = "$BASE_URL/subtitles?query=$encodedQuery$langParam&order_by=download_count&order_direction=desc"
-
-                val conn = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = 15000
-                    readTimeout = 15000
-                    setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
-                    setRequestProperty("Api-Key", apiKey)
-                    setRequestProperty("Accept", "application/json")
-                }
-
-                if (conn.responseCode == 200) {
-                    val body = conn.inputStream.bufferedReader().use { it.readText() }
-                    val json = JSONObject(body)
-                    val data = json.optJSONArray("data") ?: JSONArray()
-                    val seenFiles = mutableSetOf<Long>()
-
-                    for (i in 0 until data.length()) {
-                        val row = data.optJSONObject(i) ?: continue
-                        val attributes = row.optJSONObject("attributes") ?: continue
-                        val files = attributes.optJSONArray("files") ?: continue
-                        val rowLang = attributes.optString("language", lang)
-
-                        for (j in 0 until files.length()) {
-                            val f = files.optJSONObject(j) ?: continue
-                            val fileId = f.optLong("file_id", 0L)
-                            if (fileId <= 0L || !seenFiles.add(fileId)) continue
-
-                            val fileName = f.optString("file_name", attributes.optString("release", "Subtitle"))
-                            val rating = attributes.optDouble("ratings", 0.0)
-                            val downloads = attributes.optInt("download_count", 0)
-
-                            results.add(
-                                SubtitleSearchResult(
-                                    fileId = fileId,
-                                    name = fileName,
-                                    langName = languageName(rowLang),
-                                    iso = rowLang,
-                                    rating = rating,
-                                    downloads = downloads
-                                )
-                            )
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.w("OpenSubtitlesClient", "OpenSubtitles REST search failed", e)
-            }
+        require(apiKey.isNotBlank()) {
+            "مفتاح OpenSubtitles API غير مضبوط في إعدادات البناء"
         }
 
+        val encodedQuery = URLEncoder.encode(cleaned, "UTF-8")
+        val langParam = if (lang != "all") "&languages=$lang" else ""
+        val targetUrl = "$BASE_URL/subtitles?query=$encodedQuery$langParam&order_by=download_count&order_direction=desc"
+        val connection = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15000
+            readTimeout = 15000
+            setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+            setRequestProperty("Api-Key", apiKey)
+            setRequestProperty("Accept", "application/json")
+        }
+
+        val results = mutableListOf<SubtitleSearchResult>()
+        try {
+            val code = connection.responseCode
+            if (code != 200) {
+                val detail = connection.errorStream?.bufferedReader()?.use { it.readText() }
+                    ?.take(300).orEmpty()
+                throw IllegalStateException(
+                    when (code) {
+                        429 -> "وصل OpenSubtitles إلى حد طلبات البحث المسموح. حاول لاحقاً."
+                        401, 403 -> "رفض OpenSubtitles مفتاح API أو صلاحياته (HTTP $code)."
+                        else -> "فشل البحث في OpenSubtitles (HTTP $code)\${if (detail.isBlank()) "" else ": $detail"}"
+                    }
+                )
+            }
+
+            val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val json = JSONObject(body)
+            val data = json.optJSONArray("data") ?: JSONArray()
+            val seenFiles = mutableSetOf<Long>()
+
+            for (i in 0 until data.length()) {
+                val row = data.optJSONObject(i) ?: continue
+                val attributes = row.optJSONObject("attributes") ?: continue
+                val files = attributes.optJSONArray("files") ?: continue
+                val rowLang = attributes.optString("language", lang)
+
+                for (j in 0 until files.length()) {
+                    val file = files.optJSONObject(j) ?: continue
+                    val fileId = file.optLong("file_id", 0L)
+                    if (fileId <= 0L || !seenFiles.add(fileId)) continue
+
+                    results.add(
+                        SubtitleSearchResult(
+                            fileId = fileId,
+                            name = file.optString("file_name", attributes.optString("release", "Subtitle")),
+                            langName = languageName(rowLang),
+                            iso = rowLang,
+                            rating = attributes.optDouble("ratings", 0.0),
+                            downloads = attributes.optInt("download_count", 0)
+                        )
+                    )
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
         return results
     }
 
