@@ -381,33 +381,39 @@
         }
       }
 
-      // 2. Query configured Stremio subtitle addons
+      // 2. Query configured Stremio subtitle addons concurrently, matching Lumen's
+      // parallel addon fan-out so one slow provider does not delay every other result.
       try {
         const imdb = await resolveImdb(identity);
         const addons = installed.filter(x => x.enabled !== false && (x.resources || []).some(r => String(r).toLowerCase() === 'subtitles'));
-        for (const addon of addons) {
+        const batches = await Promise.all(addons.map(async addon => {
           try {
-            const base = addon.url.replace(/\/manifest\.json(?:\?.*)?$/,'').replace(/\/+$/,'');
+            const base = addon.url.replace(/\\/manifest\\.json(?:\\?.*)?$/,'').replace(/\\/+$/,'');
             const url = base + '/subtitles/' + imdb.type + '/' + encodeURIComponent(imdb.resourceId) + '.json';
             const payload = await nativeJson(url);
             const rows = payload && Array.isArray(payload.subtitles) ? payload.subtitles : [];
-            rows.forEach(row => {
+            return rows.map(row => {
               const lang = normalizeLang(row.lang);
-              if (subtitleLanguage !== 'all' && lang !== subtitleLanguage && !lang.startsWith(subtitleLanguage+'-')) return;
-              if (!/^https?:\/\//i.test(String(row.url || ''))) return;
-              const key = row.url;
-              if (!seen.has(key)) {
-                seen.add(key);
-                results.push({
-                  url: row.url,
-                  label: row.label || row.lang || addon.name,
-                  language: lang,
-                  addon: addon.name
-                });
-              }
-            });
-          } catch (error) { console.warn('Subtitle addon failed: ' + addon.name, error); }
-        }
+              if (subtitleLanguage !== 'all' && lang !== subtitleLanguage && !lang.startsWith(subtitleLanguage+'-')) return null;
+              if (!/^https?:\\/\\//i.test(String(row.url || ''))) return null;
+              return {
+                url: row.url,
+                label: row.label || row.lang || addon.name,
+                language: lang,
+                addon: addon.name
+              };
+            }).filter(Boolean);
+          } catch (error) {
+            console.warn('Subtitle addon failed: ' + addon.name, error);
+            return [];
+          }
+        }));
+        batches.forEach(batch => batch.forEach(entry => {
+          if (!seen.has(entry.url)) {
+            seen.add(entry.url);
+            results.push(entry);
+          }
+        }));
       } catch (imdbErr) {
         console.warn('IMDb resolution skipped or failed:', imdbErr);
       }
