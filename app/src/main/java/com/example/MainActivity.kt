@@ -129,7 +129,8 @@ class MainActivity : ComponentActivity() {
                 }
                 return
             }
-            val position = player.currentPosition.coerceAtLeast(0L)
+            // Apply sync at render time so every supported format (SRT, VTT, ASS/SSA, TTML and MicroDVD) responds to delay without rewriting its file.
+            val position = (player.currentPosition - subtitleDelayMs).coerceAtLeast(0L)
             if (position < lastSubtitlePositionMs) subtitleCueCursor = 0
             while (subtitleCueCursor < activeSubtitleCues.size &&
                 activeSubtitleCues[subtitleCueCursor].endMs <= position) {
@@ -1417,12 +1418,15 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshSubtitleSync(newOffsetMs: Long) {
         subtitleDelayMs = newOffsetMs
-        val source = activeSubtitleSourceFile ?: activeSubtitleFile ?: return
-        val player = nativePlayer ?: return
-        if (!source.exists()) return
-        android.util.Log.i("SONIXSubtitle", "refreshSubtitleSync: offsetMs=$newOffsetMs source=${source.absolutePath}")
-        val prepared = prepareExternalSubtitleWithSync(source, subtitleDelayMs)
-        attachSubtitleFile(prepared, activeSubtitleLabel, notify = false, requestId = null, sourceFile = source)
+        if (nativePlayer == null || activeSubtitleCues.isEmpty()) return
+        // Re-render immediately at the adjusted media position. Do not re-download,
+        // rewrite, or re-parse the active subtitle when the user moves the delay control.
+        subtitleCueCursor = 0
+        lastSubtitlePositionMs = 0L
+        lastRenderedSubtitleText = null
+        subtitleRenderHandler.removeCallbacks(subtitleRenderRunnable)
+        subtitleRenderHandler.post(subtitleRenderRunnable)
+        android.util.Log.i("SONIXSubtitle", "Subtitle render-time delay updated: offsetMs=$newOffsetMs")
     }
 
     private fun detectLanguageFromLabelOrName(label: String, fileName: String): String {
@@ -1514,18 +1518,13 @@ class MainActivity : ComponentActivity() {
         pendingSubtitleRequestId = requestId
         pendingSubtitleLabel = label
         pendingSubtitleNotifyLocal = notify
-        val requestedDelayMs = subtitleDelayMs
         android.util.Log.i(
             "SONIXSubtitle",
-            "Preparing external subtitle off playback thread: label='$label' size=${file.length()} delayMs=$requestedDelayMs"
+            "Preparing external subtitle off playback thread: label='$label' size=${file.length()} delayMs=$subtitleDelayMs"
         )
         subtitleIoExecutor.execute {
             try {
-                val workingFile = if (requestedDelayMs != 0L && sourceFile == file) {
-                    prepareExternalSubtitleWithSync(sourceFile, requestedDelayMs)
-                } else {
-                    file
-                }
+                val workingFile = file
                 val cues = parseSubtitleFile(workingFile)
                 require(cues.isNotEmpty()) {
                     "لم يتم العثور على توقيتات ترجمة صالحة داخل الملف"
