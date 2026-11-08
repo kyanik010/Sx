@@ -6,6 +6,13 @@ import org.junit.Test
 
 class OpenSubtitlesClientTest {
     @Test
+    fun searchReportsMissingApiKeyInsteadOfSilentlyReturningNoResults() {
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            OpenSubtitlesClient.search("Kinda Pregnant", "ar", "")
+        }
+    }
+
+    @Test
     fun removesIptvLanguageAndQualityDecorationsFromSearchTitle() {
         assertEquals(
             "Kinda Pregnant",
