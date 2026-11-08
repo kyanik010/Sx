@@ -140,7 +140,7 @@ internal object OpenSubtitlesClient {
         } finally {
             connection.disconnect()
         }
-        return results
+        return results.sortedByDescending { it.downloads }.take(40)
     }
 
     /**
